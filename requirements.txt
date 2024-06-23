@@ -1,0 +1,1 @@
+pip install jionlp selenium pyautogui uiautomation pygetwindow

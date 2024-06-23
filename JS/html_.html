@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>LOCATIONS</title>
+    <script src="https://api.map.baidu.com/getscript?v=3.0&ak=CG8eakl6UTlEb1OakeWYvofh&services=&t=20240108120956"></script>
+</head>
+<body>
+</body>
+<script>
+    function search(address, id) {
+        var myGeo = new window.BMap.Geocoder();
+        myGeo.getPoint(address, function (point) {
+            if (point) {
+                var newDiv = document.createElement('div');
+                newDiv.id = id;
+                newDiv.setAttribute('lng', `${point.lng}`);
+                newDiv.setAttribute('lat', `${point.lat}`);
+                document.body.appendChild(newDiv);
+            } else {
+                return;
+            }
+        }, "北京市");
+    }
+</script>
+
+</html>
