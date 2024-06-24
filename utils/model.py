@@ -86,6 +86,9 @@ def get_res_list(the_answer):
 
         if work_time_re:
             work_time = work_time_re[0]
+            if work_time == '空':
+                print('从大模型结果中解析【工作时间】失败：', res)
+                continue
         else:
             print('从大模型结果中解析【工作时间】失败：', res)
             continue
@@ -119,18 +122,21 @@ def get_res_list(the_answer):
 
 if __name__ == '__main__':
     ques = '''
-明天9:00
-2小时日常
-70+5好评
-东城区 西营房胡同9号院-4号楼
+中午12点
+萧山区江南学府
+4小时日常
+到手120
 
-随便什么时候
-2小时日常
-70+5好评
-东城区 西营房胡同9号院-4号楼
+早上8点
+拱墅区丰登街阮家居
+油烟机高温拆洗
+到手110
+
+早上8点
+上城区水湘东苑
+4小时日常
+到手120
 '''
     answer = call_with_messages(ques)
     if answer:
         res_list = get_res_list(answer)
-        for item in res_list:
-            print(item)

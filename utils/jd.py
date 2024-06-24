@@ -69,8 +69,7 @@ def search_res(lon, lat, the_time):
                 break
         except Exception as e:
             # TODO dic['serviceDate'] 报错 'NoneType' object is not subscriptable
-            print('京东解析出错，dic返回值：', dic)
-            print('京东解析出错原因：', e)
+            # 问题是 the_time是 Nonetype
             break
 
     return res
