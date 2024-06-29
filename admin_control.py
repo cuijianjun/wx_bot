@@ -73,8 +73,8 @@ def test(access_token, document_id):
 
 if __name__ == '__main__':
     # 配置你的应用程序凭证
-    app_id = 'cli_a6cb07f2a6f4d013'
-    app_secret = 'Vi2dPXRLCRfrj0hppj40hfiZIGLRmdbh'
+    app_id = 'cli_a60aa656b939100e'
+    app_secret = 'sarxErZ9gpw2Au6xTVJ2tdEAfZ8sx1s4'
     access_token = get_access_token(app_id, app_secret)
 
     # 配置你的文档id

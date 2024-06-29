@@ -311,8 +311,8 @@ def go():
     # 全局存储access_token
     access_token_list = [None]
     # TODO 配置你的应用程序凭证
-    app_id = 'cli_a6cb07f2a6f4d013'
-    app_secret = 'Vi2dPXRLCRfrj0hppj40hfiZIGLRmdbh'
+    app_id = 'cli_a60aa656b939100e'
+    app_secret = 'sarxErZ9gpw2Au6xTVJ2tdEAfZ8sx1s4'
     access_token = get_access_token(app_id, app_secret)
     if not access_token:
         print('飞书凭证验证失败。')
