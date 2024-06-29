@@ -2,6 +2,7 @@ import concurrent.futures
 import configparser
 import queue
 import random
+import os.path
 import re
 import threading
 import time
@@ -257,67 +258,55 @@ def exec_msg_queue(driver, exec_queue, index_queue):
 
 
 # 线程函数：处理待发送消息队列 -> 加上序号
-def msg_queue_do(msg_queue, finish_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3,
-                 today_num_list,
-                 today_num_1_list):
+def msg_queue_do(msg_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3):
     while True:
         message = msg_queue.get()
+        now_time = datetime.now().strftime('%Y-%m-%d')
         # 发送消息
         if '当前时间可预约' in message:
-            today_num_list[0] += 1
-            later_msg = f'今日序号【{today_num_list[0]}】\n\n{message}'
-            if send(access_token_list[0], later_msg, chat_id_1):
-                # 成功发送消息 -> 计数
-                finish_queue.put('0')
-            else:
-                print('飞书传消息失败。 消息类型：当前时间可预约')
+            try:
+                with open(os.path.join(os.path.dirname(
+                        os.path.abspath(__file__)), 'data', f'可预约_{now_time}.txt'), mode='rt',
+                        encoding='utf-8') as file:
+                    index = int(file.read() + 1)
+                with open(os.path.join(os.path.dirname(
+                        os.path.abspath(__file__)), 'data', f'可预约_{now_time}.txt'), mode='wt',
+                        encoding='utf-8') as file:
+                    file.write(str(index))
 
+            except:
+                with open(os.path.join(os.path.dirname(
+                        os.path.abspath(__file__)), 'data', f'可预约_{now_time}.txt'), mode='wt',
+                        encoding='utf-8') as file:
+                    file.write('1')
+                    index = 1
+
+            later_msg = f'今日序号【{str(index)}】\n\n{message}'
+            send(access_token_list[0], later_msg, chat_id_1)
 
         elif '无可预约时间' in message:
             later_msg = f'京东未通过：\n\n{message}'
-            if not send(access_token_list[0], later_msg, chat_id_3):
-                print('飞书传消息失败。 消息类型：无可预约时间')
-
+            send(access_token_list[0], later_msg, chat_id_3)
 
         else:  # 当前非空闲
-            today_num_1_list[0] += 1
-            later_msg = f'今日序号【{today_num_1_list[0]}】\n\n{message}'
-            if send(access_token_list[0], later_msg, chat_id_2):
-                # 成功发送消息 -> 计数
-                finish_queue.put('1')
-            else:
-                print('飞书传消息失败。 消息类型：当前非空闲')
+            try:
+                with open(os.path.join(os.path.dirname(
+                        os.path.abspath(__file__)), 'data', f'非空闲_{now_time}.txt'), mode='rt',
+                        encoding='utf-8') as file:
+                    index = int(file.read() + 1)
+                with open(os.path.join(os.path.dirname(
+                        os.path.abspath(__file__)), 'data', f'非空闲_{now_time}.txt'), mode='wt',
+                        encoding='utf-8') as file:
+                    file.write(str(index))
 
-
-# 线程函数：处理已完成消息队列的计数
-def msg_finish_do(finish_queue):
-    while True:
-        # 阻塞，直到有消息发送成功
-        index = finish_queue.get()
-
-        # 读取文件：使用configparser的read_file方法或read方法来读取.ini文件。
-        config = configparser.ConfigParser()
-
-        # 分类计数
-        file_name = 'index.ini' if index == '0' else 'index_1.ini'
-        config.read_file(open(file_name))
-
-        # 读取今日数量 并反转 方便最快找到 今日 key
-        options = config.items('record')
-        options.reverse()
-        now_time = datetime.now().strftime('%Y-%m-%d')
-        for option, value in options:
-            if option == now_time:
-                # 修改设置：通过set方法修改配置项的值。
-                config.set('record', now_time, str(int(value) + 1))
-                break
-        else:
-            # 转点之后，不存在的日期从1开始计
-            config.set('record', now_time, '1')
-
-        # 写入文件：使用write方法将修改后的配置写回到文件。
-        with open(file_name, 'w') as configfile:
-            config.write(configfile)
+            except:
+                with open(os.path.join(os.path.dirname(
+                        os.path.abspath(__file__)), 'data', f'非空闲_{now_time}.txt'), mode='wt',
+                        encoding='utf-8') as file:
+                    file.write('1')
+                    index = 1
+            later_msg = f'今日序号【{str(index)}】\n\n{message}'
+            send(access_token_list[0], later_msg, chat_id_2)
 
 
 # 主程序
@@ -424,45 +413,6 @@ def go():
         return
     # ——————————————————————————配置selenium谷歌浏览器——————————————————————————————————————
 
-    # ——————————————————————————初始化计数 空闲——————————————————————————————————————
-    # 全局变量：用于存放今日有效消息总数
-    today_num = [None]
-
-    # 读取文件：使用configparser的read_file方法或read方法来读取.ini文件。
-    config = configparser.ConfigParser()
-    config.read_file(open('index.ini'))
-
-    # 读取今日数量 并反转 方便最快找到 今日 key
-    options = config.items('record')
-    options.reverse()
-    now_time = datetime.now().strftime('%Y-%m-%d')
-    for option, value in options:
-        if option == now_time:
-            today_num[0] = int(value)
-            break
-    else:
-        today_num[0] = 0
-    # ——————————————————————————初始化计数 空闲——————————————————————————————————————
-
-    # ——————————————————————————初始化计数 非空闲——————————————————————————————————————
-    # 全局变量：用于存放今日有效消息总数
-    today_num_1 = [None]
-
-    # 读取文件：使用configparser的read_file方法或read方法来读取.ini文件。
-    config = configparser.ConfigParser()
-    config.read_file(open('index_1.ini'))
-
-    # 读取今日数量 并反转 方便最快找到 今日 key
-    options = config.items('record')
-    options.reverse()
-    now_time = datetime.now().strftime('%Y-%m-%d')
-    for option, value in options:
-        if option == now_time:
-            today_num_1[0] = int(value)
-            break
-    else:
-        today_num_1[0] = 0
-    # ——————————————————————————初始化计数 非空闲——————————————————————————————————————
     # 创建一个从微信获取原生消息 存放的队列
     wait_for_exec_queue = queue.Queue()
 
@@ -471,9 +421,6 @@ def go():
 
     # 创建一个已经处理完待发送的 消息队列
     msg_queue = queue.Queue()
-
-    # 创建一个已经发送完的消息队列 用于计数
-    finish_queue = queue.Queue()
 
     # 创建一个固定长度为 200 的队列 用于排除重复消息
     fix_msg_queue = FixedSizeQueue(50)
@@ -535,16 +482,10 @@ def go():
 
     # 开启线程：从待发送消息队列 取消息，然后发送到飞书
     print('开启线程 4/5 >>> ')
-    for i in range(5):
+    for i in range(1):
         p = threading.Thread(target=msg_queue_do,
-                             args=(msg_queue, finish_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3,
-                                   today_num, today_num_1))
+                             args=(msg_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3))
         p.start()
-
-    # 开启线程：处理已完成消息队列的计数
-    print('开启线程 5/5 >>> ')
-    p = threading.Thread(target=msg_finish_do, args=(finish_queue,))
-    p.start()
 
     print('线程加载完毕 开始工作 >>> ')
 
