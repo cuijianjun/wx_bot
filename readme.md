@@ -33,3 +33,7 @@
 5、打包
 
     通过pyinstaller打包之后将dist文件夹中的内容放至指定文件夹即可
+
+6. dist 下 秘钥控制 
+    document_id中的复制到控制台
+    mac在admin_control 中的admin_control执行文件
