@@ -1,27 +1,32 @@
+import concurrent.futures
+import configparser
+import queue
+import random
 import os.path
 import re
-import time
-import queue
-import pyautogui
 import threading
-import configparser
-import pygetwindow as gw
+import time
+import uuid
 from datetime import datetime
+
+import pyautogui
+import pygetwindow as gw
 from uiautomation import WindowControl
 
+from utils.convert_time import convert_time
+from utils.deque import FixedSizeQueue
 from utils.fly_book import *
 from utils.jd import search_res
-from utils.deque import FixedSizeQueue
-from utils.convert_time import convert_time
-from utils.selenium_get_location import search
-from utils.selenium_get_location import launch_browser
-from utils.model import get_res_list, call_with_messages
+from utils.model import call_with_messages, get_res_list
+from utils.selenium_get_location import launch_browser, search
 from utils.str_to_hash import string_to_short_hash
 
 
 # 无限循环 用线程池监控微信消息列表的每一行，并调用 msg_execute() 将捕捉到的单个消息，加入队列
 def get_msg(wx, fix_msg_queue_total, wait_for_exec_queue):
     while True:
+        e = threading.Event()
+        e.wait(random.randint(100, 300) / 1000)
         # 刷新微信窗口中的群聊列表
         try:
             ListControl_conmunicate = wx.ListControl(Name='会话')
