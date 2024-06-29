@@ -25,6 +25,7 @@ from utils.str_to_hash import string_to_short_hash
 
 file_lock = threading.Lock()
 
+
 # 无限循环 用线程池监控微信消息列表的每一行，并调用 msg_execute() 将捕捉到的单个消息，加入队列
 def get_msg(wx, fix_msg_queue_total, wait_for_exec_queue):
     while True:
@@ -273,6 +274,7 @@ def inc_file_record(abs_filename: str):
             file.write(str(index))
     return index
 
+
 # 线程函数：处理待发送消息队列 -> 加上序号
 def msg_queue_do(msg_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3):
     while True:
@@ -320,8 +322,9 @@ def go():
     access_token_list[0] = access_token
     # ——————————————————————————初始化飞书凭证——————————————————————————————————————
     # TODO 配置你的文档id
+
     psw = input('请输入密钥：')
-    if psw.strip() not in get_document_content(access_token_list[0], 'WDntdUXWIoEI4IxFs3FcfCAQndE').split('\n'):
+    if psw.strip() not in get_document_content(access_token_list[0], 'TVnmdRnCJoZXgLxNue0ckXZGnjf').split('\n'):
         print('密钥错误或已过期！')
         return
 
@@ -403,7 +406,6 @@ def go():
     savedStdout = sys.stdout
     print_log = open("printlog.log", "w", encoding='utf8')
     sys.stdout = print_log
-
 
     # ——————————————————————————配置selenium谷歌浏览器——————————————————————————————————————
     driver = launch_browser()
