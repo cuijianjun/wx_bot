@@ -10,7 +10,7 @@ dashscope.api_key = 'sk-251ae7ea282b42018baf65e2571b9b5b'
 
 def get_time(work_time, source_text):
     # 检测字段：现在/随便等
-    if work_time == '现在' or '现在' in source_text or '几点都行' in source_text or '马上' in source_text or '立即' in source_text or '立刻' in source_text or '随便' in source_text or '随时' in source_text:
+    if work_time == '现在' or '现在' in source_text or '都行' in source_text or '马上' in source_text or '立即' in source_text or '立刻' in source_text or '随便' in source_text or '随时' in source_text:
         return datetime.now().strftime('%Y-%m-%d %H:%M')
 
 
@@ -86,6 +86,7 @@ def get_res_list(the_answer):
 
         if work_time_re:
             work_time = work_time_re[0]
+            # TODO BUG修复
             if work_time == '空':
                 print('从大模型结果中解析【工作时间】失败：', res)
                 continue
