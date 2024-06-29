@@ -1,9 +1,11 @@
 import concurrent.futures
 import configparser
+import os
+import os.path
 import queue
 import random
-import os.path
 import re
+import sys
 import threading
 import time
 import uuid
@@ -21,6 +23,7 @@ from utils.model import call_with_messages, get_res_list
 from utils.selenium_get_location import launch_browser, search
 from utils.str_to_hash import string_to_short_hash
 
+file_lock = threading.Lock()
 
 # 无限循环 用线程池监控微信消息列表的每一行，并调用 msg_execute() 将捕捉到的单个消息，加入队列
 def get_msg(wx, fix_msg_queue_total, wait_for_exec_queue):
@@ -257,29 +260,33 @@ def exec_msg_queue(driver, exec_queue, index_queue):
         index_queue.put(last_res)
 
 
+def inc_file_record(abs_filename: str):
+    with file_lock:
+        if os.path.exists(abs_filename):
+            with open(abs_filename, mode='r', encoding='utf-8') as file:
+                index = int(file.read()) + 1
+        else:
+            with open(abs_filename, mode='w', encoding='utf-8') as file:
+                file.write('1')
+                index = 1
+        with open(abs_filename, mode='w', encoding='utf-8') as file:
+            file.write(str(index))
+    return index
+
 # 线程函数：处理待发送消息队列 -> 加上序号
 def msg_queue_do(msg_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3):
     while True:
         message = msg_queue.get()
         now_time = datetime.now().strftime('%Y-%m-%d')
+        current_dir = os.getcwd()
+        if not os.path.isdir(os.path.join(current_dir, 'data')):
+            os.mkdir('data')
         # 发送消息
         if '当前时间可预约' in message:
-            try:
-                with open(os.path.join(os.path.dirname(
-                        os.path.abspath(__file__)), 'data', f'可预约_{now_time}.txt'), mode='rt',
-                        encoding='utf-8') as file:
-                    index = int(file.read() + 1)
-                with open(os.path.join(os.path.dirname(
-                        os.path.abspath(__file__)), 'data', f'可预约_{now_time}.txt'), mode='wt',
-                        encoding='utf-8') as file:
-                    file.write(str(index))
-
-            except:
-                with open(os.path.join(os.path.dirname(
-                        os.path.abspath(__file__)), 'data', f'可预约_{now_time}.txt'), mode='wt',
-                        encoding='utf-8') as file:
-                    file.write('1')
-                    index = 1
+            bookable_file_name = f'可预约_{now_time}.txt'
+            abs_bookable_file = os.path.join(
+                current_dir, 'data', bookable_file_name)
+            index = inc_file_record(abs_bookable_file)
 
             later_msg = f'今日序号【{str(index)}】\n\n{message}'
             send(access_token_list[0], later_msg, chat_id_1)
@@ -289,22 +296,9 @@ def msg_queue_do(msg_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3):
             send(access_token_list[0], later_msg, chat_id_3)
 
         else:  # 当前非空闲
-            try:
-                with open(os.path.join(os.path.dirname(
-                        os.path.abspath(__file__)), 'data', f'非空闲_{now_time}.txt'), mode='rt',
-                        encoding='utf-8') as file:
-                    index = int(file.read() + 1)
-                with open(os.path.join(os.path.dirname(
-                        os.path.abspath(__file__)), 'data', f'非空闲_{now_time}.txt'), mode='wt',
-                        encoding='utf-8') as file:
-                    file.write(str(index))
-
-            except:
-                with open(os.path.join(os.path.dirname(
-                        os.path.abspath(__file__)), 'data', f'非空闲_{now_time}.txt'), mode='wt',
-                        encoding='utf-8') as file:
-                    file.write('1')
-                    index = 1
+            free_file_name = f'非空闲_{now_time}.txt'
+            abs_free_file = os.path.join(current_dir, 'data', free_file_name)
+            index = inc_file_record(abs_free_file)
             later_msg = f'今日序号【{str(index)}】\n\n{message}'
             send(access_token_list[0], later_msg, chat_id_2)
 
@@ -405,6 +399,11 @@ def go():
 
     print('飞书配置完成 >>>')
     # ——————————————————————————持续刷新飞书凭证，创建飞书群——————————————————————————————————————
+
+    savedStdout = sys.stdout
+    print_log = open("printlog.log", "w", encoding='utf8')
+    sys.stdout = print_log
+
 
     # ——————————————————————————配置selenium谷歌浏览器——————————————————————————————————————
     driver = launch_browser()
