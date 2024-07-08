@@ -34,12 +34,11 @@ def get_msg(wx, fix_msg_queue_total, wait_for_exec_queue):
         # 刷新微信窗口中的群聊列表
         try:
             ListControl_conmunicate = wx.ListControl(Name='会话')
+            for msg in ListControl_conmunicate.GetChildren():
+                p = threading.Thread(target=msg_execute, args=(msg, fix_msg_queue_total, wait_for_exec_queue))
+                p.start()
         except:
             continue
-
-        for msg in ListControl_conmunicate.GetChildren():
-            p = threading.Thread(target=msg_execute, args=(msg, fix_msg_queue_total, wait_for_exec_queue))
-            p.start()
 
 
 # 将捕捉到的单个消息，加入队列，并更新全局dict_all
