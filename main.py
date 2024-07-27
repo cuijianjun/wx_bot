@@ -10,6 +10,9 @@ import threading
 import time
 import uuid
 from datetime import datetime
+import requests
+from urllib.parse import urljoin
+import hashlib
 
 import pyautogui
 import pygetwindow as gw
@@ -25,9 +28,11 @@ from utils.str_to_hash import string_to_short_hash
 
 file_lock = threading.Lock()
 
+api_ver_order = ""
+
 
 # 无限循环 用线程池监控微信消息列表的每一行，并调用 msg_execute() 将捕捉到的单个消息，加入队列
-def get_msg(wx, fix_msg_queue_total, wait_for_exec_queue):
+def get_msg(wx, fix_msg_queue_total, wait_for_exec_queue, psw):
     while True:
         e = threading.Event()
         e.wait(random.randint(100, 300) / 1000)
@@ -35,14 +40,35 @@ def get_msg(wx, fix_msg_queue_total, wait_for_exec_queue):
         try:
             ListControl_conmunicate = wx.ListControl(Name='会话')
             for msg in ListControl_conmunicate.GetChildren():
-                p = threading.Thread(target=msg_execute, args=(msg, fix_msg_queue_total, wait_for_exec_queue))
+                p = threading.Thread(target=msg_execute, args=(msg, fix_msg_queue_total, wait_for_exec_queue, psw))
                 p.start()
         except:
             continue
 
 
+def is_orderable(user_id: str, msg_hash: str) -> bool:
+    """检测是否可接单"""
+    global api_ver_order
+    if api_ver_order == "":
+        # 加载配置文件
+        config = configparser.ConfigParser()
+        config.read('config.ini', encoding='utf-8')
+        api_ver_order = config.get('config', 'api_ver_order')
+
+    url = urljoin(api_ver_order, "/api/verOrder")
+    req = requests.post(url, params={"user_id": user_id, "message_hash": msg_hash})
+
+    if req.status_code == 200:
+        try:
+            if req.json().get('code') == 0:
+                return True
+        except Exception:
+            print("verOrder api error.")
+    return False
+
+
 # 将捕捉到的单个消息，加入队列，并更新全局dict_all
-def msg_execute(msg, fix_msg_queue_total, wait_for_exec_queue):
+def msg_execute(msg, fix_msg_queue_total, wait_for_exec_queue, psw):
     try:
         # 排除"折叠置顶"的按钮
         if len(list(msg.GetFirstChildControl().GetChildren())) == 1:
@@ -63,6 +89,10 @@ def msg_execute(msg, fix_msg_queue_total, wait_for_exec_queue):
 
         # 检测纯消息是否重复
         if string_to_short_hash(the_content) in fix_msg_queue_total.get_queue():
+            return
+
+        # 检测是否可接单
+        if not is_orderable(psw, hashlib.md5(the_content.encode('utf-8')).hexdigest()):
             return
 
         fix_msg_queue_total.add(string_to_short_hash(the_content))
@@ -461,7 +491,7 @@ def go():
 
     # 开启线程：从 WX 获取消息 存入 wait_for_exec_queue
     print('开启线程 1/5 >>> ')
-    p = threading.Thread(target=get_msg, args=(wx, fix_msg_queue_total, wait_for_exec_queue))
+    p = threading.Thread(target=get_msg, args=(wx, fix_msg_queue_total, wait_for_exec_queue, psw))
     p.start()
 
     # 开启线程：从 wait_for_exec_queue 队列中取出消息，并调用  ——————————大模型——————————处理， 结果存入 dict_queue
