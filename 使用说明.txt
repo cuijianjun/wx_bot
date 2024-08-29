@@ -9,3 +9,10 @@
 微信需要可见，请取消所有置顶，至多保留1个，且聊天页面停留在置顶联系人的聊天框。
 
 附视频
+
+
+打包前
+py -m comtypes.clear_cache  清除缓存 
+使用打包命令
+nuitka --onefile  --include-data-dir=JS=JS --include-data-dir=data=data --include-data-file=key.json=key.json --include-data-file=location.txt=location.txt  --enable-plugin=tk-inter --include-package=uiautomation  --include-package=comtypes --windows-disable-console --nofollow-imports --clang main.py
+

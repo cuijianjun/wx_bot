@@ -14,7 +14,6 @@ class FixedSizeQueue:
     def get_queue(self):
         return list(self.queue)
 
-
 # 使用示例
 if __name__ == '__main__':
     max_queue_size = 2

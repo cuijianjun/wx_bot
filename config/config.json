@@ -1,0 +1,12 @@
+{
+    "user": {
+        "autologon": true,
+        "key": "0230"
+    },
+    "group": {
+
+    },
+    "thread": {
+        "threadCount": 20
+    }
+}

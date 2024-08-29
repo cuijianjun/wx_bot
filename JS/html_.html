@@ -7,11 +7,13 @@
 </head>
 <body>
 </body>
+
 <script>
-    function search(address, id) {
+    function search(address, id,city='北京市') {
         var myGeo = new window.BMap.Geocoder();
         myGeo.getPoint(address, function (point) {
             if (point) {
+                console.log(point)
                 var newDiv = document.createElement('div');
                 newDiv.id = id;
                 newDiv.setAttribute('lng', `${point.lng}`);
@@ -20,8 +22,10 @@
             } else {
                 return;
             }
-        }, "北京市");
+        }, city);
     }
+    search('浙江杭州市下城区朝晖街道稻香园(南区)7幢3单元501室','MEIG211','杭州市')
+     
 </script>
 
 </html>

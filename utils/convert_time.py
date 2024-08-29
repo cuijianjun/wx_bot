@@ -28,5 +28,5 @@ def convert_time(input_time):
 
 
 if __name__ == '__main__':
-    the_time = convert_time('2024-05-14 00:01')
+    the_time = convert_time('2024-08-29 19:19')
     print(the_time)
