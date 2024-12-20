@@ -1,7 +1,7 @@
 1、环境配置：
 
     python 3.8环境下安装下列模块：
-        jionlp selenium pyautogui uiautomation pygetwindow
+        jionlp selenium pyautogui uiautomation pygetwindow nuitka
 
 2、py说明：
 
@@ -18,22 +18,9 @@
     admin_control：用于后台控制密钥
     main：主流程函数
 
-3、配置文件说明：
 
-    html_.html：用于启动selnium
-    index：用于计数
-    document_id：配置飞书
-    key：配置关键词
-    location：配置城市
-
-4、 程序实现流程
-
-    捕获微信消息 ->消息去重-> 白名单过滤 -> ai切割，解析地址、时间-> 白名单&黑名单过滤 -> 百度查询经纬度坐标 -> 京东查询结果 -> 地址时间去重 -> 返回到飞书（均基于队列实现）
-
-5、打包
-
-    通过pyinstaller打包之后将dist文件夹中的内容放至指定文件夹即可
-
-6. dist 下 秘钥控制 
-    document_id中的复制到控制台
-    mac在admin_control 中的admin_control执行文件
+3、打包
+    先执行清空缓存
+    py -m comtypes.clear_cache
+    打包命令
+    nuitka --onefile  --include-data-dir=JS=JS --include-data-dir=data=data --include-data-file=key.json=key.json --include-data-file=location.txt=location.txt  --enable-plugin=tk-inter --include-package=uiautomation  --include-package=comtypes --windows-disable-console --nofollow-imports --clang main.py

@@ -1,1 +1,1 @@
-pip install jionlp selenium pyautogui uiautomation pygetwindow
+pip install jionlp selenium pyautogui uiautomation pygetwindow nuitka

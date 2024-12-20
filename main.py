@@ -1,525 +1,716 @@
-import concurrent.futures
-import configparser
-import os
-import os.path
-import queue
-import random
-import re
+import tkinter as tk
+from tkinter import messagebox, ttk, simpledialog
+from tkinter import Toplevel
+from work import TaskManager
 import sys
+import os
+import re
 import threading
+import json
+from datetime import datetime, time as dt_time
 import time
-import uuid
-from datetime import datetime
-import requests
-from urllib.parse import urljoin
-import hashlib
-
-import pyautogui
-import pygetwindow as gw
-from uiautomation import WindowControl
-
-from utils.convert_time import convert_time
-from utils.deque import FixedSizeQueue
-from utils.fly_book import *
-from utils.jd import search_res
-from utils.model import call_with_messages, get_res_list
-from utils.selenium_get_location import launch_browser, search
-from utils.str_to_hash import string_to_short_hash
-
-file_lock = threading.Lock()
-
-api_ver_order = ""
 
 
-# 无限循环 用线程池监控微信消息列表的每一行，并调用 msg_execute() 将捕捉到的单个消息，加入队列
-def get_msg(wx, fix_msg_queue_total, wait_for_exec_queue, psw):
-    while True:
-        e = threading.Event()
-        e.wait(random.randint(100, 300) / 1000)
-        # 刷新微信窗口中的群聊列表
-        try:
-            ListControl_conmunicate = wx.ListControl(Name='会话')
-        except:
-            continue
+class ConfigManager:
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.config = {}
+        self.load()
 
-        for msg in ListControl_conmunicate.GetChildren():
-            p = threading.Thread(target=msg_execute, args=(msg, fix_msg_queue_total, wait_for_exec_queue))
-            p.start()
+    def load(self):
+        if os.path.exists(self.file_path):
+            with open(self.file_path, 'r', encoding="utf-8") as file:
+                self.config = json.load(file)
 
+    def save(self):
+        with open(self.file_path, 'w', encoding="utf-8") as file:
+            json.dump(self.config, file, indent=4, ensure_ascii=False)
 
-def is_orderable(user_id: str, msg_hash: str) -> bool:
-    """检测是否可接单"""
-    global api_ver_order
-    if api_ver_order == "":
-        # 加载配置文件
-        config = configparser.ConfigParser()
-        config.read('config.ini', encoding='utf-8')
-        api_ver_order = config.get('config', 'api_ver_order')
-
-    url = urljoin(api_ver_order, "/api/verOrder")
-    req = requests.post(url, params={"user_id": user_id, "message_hash": msg_hash})
-
-    if req.status_code == 200:
-        try:
-            if req.json().get('code') == 0:
-                return True
-        except Exception:
-            print("verOrder api error.")
-    return False
-
-
-# 将捕捉到的单个消息，加入队列，并更新全局dict_all
-def msg_execute(msg, fix_msg_queue_total, wait_for_exec_queue, psw):
-    try:
-        # 排除"折叠置顶"的按钮
-        if len(list(msg.GetFirstChildControl().GetChildren())) == 1:
-            return
-
-        # 获取消息
-        content = msg.GetFirstChildControl().GetChildren()[1].GetLastChildControl().GetFirstChildControl().Name
-
-        # 如果是置顶的空消息 则不处理
-        if not content:
-            return
-
-        # 获取纯消息，不包含发送人
-        if '条]' in content or '我]' in content:
-            the_content = content.split('：', 1)[-1]
-        else:
-            the_content = content
-
-        # 检测纯消息是否重复
-        if string_to_short_hash(the_content) in fix_msg_queue_total.get_queue():
-            return
-
-        # 检测是否可接单
-        if not is_orderable(psw, hashlib.md5(the_content.encode('utf-8')).hexdigest()):
-            return
-
-        fix_msg_queue_total.add(string_to_short_hash(the_content))
-
-        # 获取用户名称
-        user = msg.GetFirstChildControl().GetChildren()[1].GetFirstChildControl().GetFirstChildControl().Name
-
-        next_msg = 'time：' + datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S") + '---' + 'user：' + user + '---' + 'content：' + content + '---'
-        wait_for_exec_queue.put(next_msg)
-
-
-    except:
-        print('事件无法调用任何订户')
-
-
-# 开启5个线程执行该函数：从wait_for_exec_queue队列中获取 原生消息 交给 大模型切割、提取   然后存 dict_queue 队列
-def exec_source_msg(wait_for_exec_queue, dict_queue, keys, refuse_keys, locations, fix_msg_queue):
-    while True:
-        # 从wait_for_exec_queue队列中获取  原生消息
-        source_msg = wait_for_exec_queue.get()
-        the_content = re.findall("content：(.+?)---", source_msg)[0]
-
-        # 原始消息处理（去除群里的发信人）
-        if '条]' in the_content or '我]' in the_content:
-            the_content = the_content.split('：', 1)[-1]
-
-        # 检测白名单关键词
-        nokeys = True
+    def _get_nested_value(self, data, keys):
+        current = data
         for key in keys:
-            if key in the_content:
-                nokeys = False
-                break
-        # 无白名单关键词，跳过
-        if nokeys:
-            continue
-
-        # 分割换行符  ---  补充说明：﻿﻿（零宽度空格，代表微信消息中的"换行符" ） 代码：\ufeff
-        split_lines = re.split('[\ufeff\n]', the_content)
-        # 拼接换行符
-        if len(split_lines) > 1:
-            the_content = '\n'.join(split_lines)
-
-        # 有白名单关键词，继续执行，调用  _______大模型_______  拆分详细信息 获取回答
-        answer = call_with_messages(the_content)
-        # 获取回答失败，跳过
-        if not answer:
-            continue
-
-        # 获取大模型回答的字典
-        res_list = get_res_list(answer)
-        for res in res_list:
-            # print(f"{res['work_time']}          {res['work_addr']}          {res['source_text']}")
-
-            # 检测过滤省份
-            nolocations = True
-            for location in locations:
-                if location in res['work_addr']:
-                    nolocations = False
-                    break
-            # 无过滤省份关键词，跳过
-            if nolocations:
-                print(res['work_addr'], '非法省份')
-                continue
-
-            # 检测白名单关键词
-            nokeys = True
-            for key in keys:
-                if key in res['source_text']:
-                    nokeys = False
-                    break
-            # 无白名单关键词，跳过
-            if nokeys:
-                continue
-
-            # 检测非法关键词
-            has_refuse_keys = False
-            for refuse_key in refuse_keys:
-                if refuse_key in res['source_text']:
-                    has_refuse_keys = True
-                    break
-            # 存在非法关键词，跳过
-            if has_refuse_keys:
-                continue
-
-            # TODO 补充黑名单特殊关键字
-            if '玻璃' in res["source_text"] and '不' not in res["source_text"]:
-                continue
-
-            if '玻璃擦' in res["source_text"]:
-                continue
-
-            if '窗' in res["source_text"] and '不' not in res["source_text"]:
-                continue
-
-            # 如果近200条消息有重复地址 则跳过
-            if string_to_short_hash(res['work_addr'] + res['work_time']) in fix_msg_queue.get_queue():
-                print(
-                    f'重复的地址：{res["work_addr"]}--{res["work_time"]}--{string_to_short_hash(res["work_addr"] + res["work_time"])}')
-                continue
-            # 将地址存入固定长度的消息队列 fix_msg_queue
-
-            print(
-                f'未重复的地址：{res["work_addr"]}--{res["work_time"]}--{string_to_short_hash(res["work_addr"] + res["work_time"])}')
-            fix_msg_queue.add(string_to_short_hash(res['work_addr'] + res['work_time']))
-
-            dict_queue.put({'source_msg': source_msg, 'the_content': the_content, 'addr': res['work_addr'],
-                            'work_time': res['work_time'],
-                            'split_msg': res['source_text']})
-
-
-# 无限循环从 exec_queue 队列中取字典，获取最终查询结果 last_res 然后把查询到的last_res 并行传入队列 msg_queue
-def exec_msg_queue(driver, exec_queue, index_queue):
-    """
-    无限循环从 exec_queue 队列中取字典，获取最终查询结果 last_res
-    然后把查询到的last_res 并行传入队列 msg_queue
-
-    :param driver: 浏览器驱动
-    :param exec_queue: 接收队列 字典队列
-    :param msg_queue: 发送队列（待发送消息）
-    :return:
-    """
-    while True:
-        the_dict = exec_queue.get()
-        the_addr = the_dict['addr']
-        the_source_msg = the_dict['source_msg']
-        split_msg = the_dict['split_msg']
-        work_time = the_dict['work_time']
-        # the_time 是送往京东查询的时间
-        the_time = convert_time(work_time)
-        # 获取经纬度
-        location = search(driver, the_addr)
-
-        # res：当天可排工期的列表
-        res = search_res(location['lng'], location['lat'], the_time)
-        res_text = ''
-        if res:
-            the_result = None
-            # 拿到客户要求的当前时间段的查询结果the_result
-            for item in res:
-                if item['time'] == the_time[-5:]:
-                    the_result = item['enabled']
-                    break
-
-            if the_result:
-                res_text = '【当前时间可预约】'
+            if isinstance(current, dict) and key in current:
+                current = current[key]
             else:
-                for dic in res:
-                    if dic['enabled']:
-                        res_text += f"【{dic['time']}】\n"
-        else:
-            # TODO 京东解析失败
-            print(the_addr, '京东解析失败。')
-            continue
+                return None
+        return current
 
-        # 如果没有时间段是空闲的，则跳过，不处理这条消息
-        if res_text == '':
-            res_text = '【无可预约时间】'
+    def _set_nested_value(self, data, keys, value):
+        current = data
+        for key in keys[:-1]:
+            if key not in current:
+                current[key] = {}
+            current = current[key]
+        current[keys[-1]] = value
 
-        # 计算【消息来源】和【原始消息】
-        all_msg = re.findall("content：(.+?)---", the_source_msg)[0]
-        if '条]' in all_msg or '我]' in all_msg:
-            msg_group = re.findall("user：(.+?)---", the_source_msg)[0]
-            msg_autor = all_msg.split('：', 1)[0].split(']', 1)[-1].strip()
-            msg_source = '【群】' + msg_group + '  ->  ' + msg_autor
-        else:
-            msg_source = '【个人】' + re.findall("user：(.+?)---", the_source_msg)[0]
+    def get(self, key_path, default=None):
+        keys = key_path.split('.')
+        return self._get_nested_value(self.config, keys) or default
 
-        # 计算【消息耗时】
-        the_time_receve = re.findall("time：(.+?)---", the_source_msg)[0]
-        the_time_receve_datetime = datetime.strptime(the_time_receve, "%Y-%m-%d %H:%M:%S")
-        time_delta = datetime.now() - the_time_receve_datetime
-        time_delta_text = round(float(str(time_delta).rsplit(":", 1)[1]), 1)
+    def set(self, key_path, value):
+        keys = key_path.split('.')
+        self._set_nested_value(self.config, keys, value)
+        self.save()
 
-        last_res = f'''
-1.详细地址：【{the_addr}】
-
-2.工作时间：{the_time}
-
-3.消息来源：{msg_source}
-
-4.查询结果：\n{res_text}
-
-5.切割消息：【
-{split_msg}
-】
-
-6.原始消息：【
-{the_dict['the_content']}
-】
-
-7.本次消耗：【{time_delta_text}】
-'''
-
-        index_queue.put(last_res)
-
-
-def inc_file_record(abs_filename: str):
-    with file_lock:
-        if os.path.exists(abs_filename):
-            with open(abs_filename, mode='r', encoding='utf-8') as file:
-                index = int(file.read()) + 1
-        else:
-            with open(abs_filename, mode='w', encoding='utf-8') as file:
-                file.write('1')
-                index = 1
-        with open(abs_filename, mode='w', encoding='utf-8') as file:
-            file.write(str(index))
-    return index
-
-
-# 线程函数：处理待发送消息队列 -> 加上序号
-def msg_queue_do(msg_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3):
-    while True:
-        message = msg_queue.get()
-        now_time = datetime.now().strftime('%Y-%m-%d')
-        current_dir = os.getcwd()
-        if not os.path.isdir(os.path.join(current_dir, 'data')):
-            os.mkdir('data')
-        # 发送消息
-        if '当前时间可预约' in message:
-            bookable_file_name = f'可预约_{now_time}.txt'
-            abs_bookable_file = os.path.join(
-                current_dir, 'data', bookable_file_name)
-            index = inc_file_record(abs_bookable_file)
-
-            later_msg = f'今日序号【{str(index)}】\n\n{message}'
-            send(access_token_list[0], later_msg, chat_id_1)
-
-        elif '无可预约时间' in message:
-            later_msg = f'京东未通过：\n\n{message}'
-            send(access_token_list[0], later_msg, chat_id_3)
-
-        else:  # 当前非空闲
-            free_file_name = f'非空闲_{now_time}.txt'
-            abs_free_file = os.path.join(current_dir, 'data', free_file_name)
-            index = inc_file_record(abs_free_file)
-            later_msg = f'今日序号【{str(index)}】\n\n{message}'
-            send(access_token_list[0], later_msg, chat_id_2)
-
-
-# 主程序
-def go():
-    # 全局记录：存储消息队列，用于对比。
-    fix_msg_queue_total = FixedSizeQueue(800)
-    # ——————————————————————————初始化飞书凭证——————————————————————————————————————
-    # 全局存储access_token
-    access_token_list = [None]
-    # TODO 配置你的应用程序凭证
-    app_id = 'cli_a60aa656b939100e'
-    app_secret = 'sarxErZ9gpw2Au6xTVJ2tdEAfZ8sx1s4'
-    access_token = get_access_token(app_id, app_secret)
-    if not access_token:
-        print('飞书凭证验证失败。')
-        return
-    access_token_list[0] = access_token
-    # ——————————————————————————初始化飞书凭证——————————————————————————————————————
-    # TODO 配置你的文档id
-
-    psw = input('请输入密钥：')
-    if psw.strip() not in get_document_content(access_token_list[0], 'TVnmdRnCJoZXgLxNue0ckXZGnjf').split('\n'):
-        print('密钥错误或已过期！')
-        return
-
-    print('开始程序初始化 >>>')
-
-    # ——————————————————————————持续刷新飞书凭证，创建飞书群——————————————————————————————————————
-    print('配置飞书机器人 >>>')
-    # 持续刷新飞书凭证
-    p = threading.Thread(target=refresh_access_token, args=(app_id, app_secret, access_token_list))
-    p.start()
-
-    # 选择飞书群聊回传方式
-    while True:
-        x = input('请选择飞书群聊回传方式：（1.创建新的群聊 2.载入群聊）：')
-        if x.strip() == '1':
-            # 创建群
-            chat_id_1 = create_group(access_token, '当前空闲')
-            if not chat_id_1:
+    def remove(self, key_path):
+        keys = key_path.split('.')
+        current = self.config
+        parent = None
+        for key in keys[:-1]:
+            if key in current:
+                parent = current
+                current = current[key]
+            else:
                 return
-            chat_id_2 = create_group(access_token, '当前非空闲')
-            if not chat_id_2:
-                return
-            chat_id_3 = create_group(access_token, '未通过京东')
-            if not chat_id_3:
-                return
-            break
+        if keys[-1] in current:
+            del current[keys[-1]]
+            self.save()
 
-        elif x.strip() == '2':
-            try:
-                with open('group_create_log.txt', mode='rt', encoding='utf-8') as file_object:
-                    content = file_object.read()
-                chat_id_1 = re.findall('当前空闲 chat_id ->(.+?)\n', content)[0]
-                chat_id_2 = re.findall('当前非空闲 chat_id ->(.+?)\n', content)[0]
-                chat_id_3 = re.findall('未通过京东 chat_id ->(.+?)\n', content)[0]
-                break
+    def update(self, new_data):
+        self.config.update(new_data)
+        self.save()
 
-            except:
-                chat_id_1 = input('当前空闲 chat_id ->').strip()
-                chat_id_2 = input('当前非空闲 chat_id ->').strip()
-                chat_id_3 = input('未通过京东 chat_id ->').strip()
-                break
 
+def create_config(file_path):
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        default_object = {
+            "user": {
+                "autologon": True,
+                "key": ""
+            },
+            "group": {},
+            "thread":{
+                "threadCount":20
+            }
+        }
+        with open(file_path, 'w', encoding='utf-8') as file:
+            json.dump(default_object, file, ensure_ascii=False, indent=4)
+
+
+def runfn(msg):
+    new_msg = msg.replace("run_info:", "")
+    cleaned_msg = new_msg.replace(" ", "").replace("\n", "")
+    truncated_msg = (cleaned_msg[:30] + '...') if len(cleaned_msg) > 30 else cleaned_msg
+    status_label.config(text=f"状态: {truncated_msg}", fg="black")
+    update_log(new_msg)
+    root.update()
+
+
+def errorfn(msg):
+    global status_label, btn_start, btn_pause, error_log_button
+    cleaned_msg = msg.replace(" ", "").replace("\n", "")
+    truncated_msg = (cleaned_msg[:40] + '...') if len(cleaned_msg) > 40 else msg
+    status_label.config(text=f"状态: 执行错误-{truncated_msg}", fg="red")
+    btn_start.config(state=tk.NORMAL)
+    btn_pause.config(state=tk.DISABLED)
+    error_log_button.config(state=tk.NORMAL)
+    update_error_log(msg)
+    root.update()
+    # update_idletasks
+
+def ensure_file_exists(file_path):
+    dir_name = os.path.dirname(file_path)
+        
+    if dir_name and not os.path.exists(dir_name):
+        os.makedirs(dir_name)
+        
+    if not os.path.exists(file_path):
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write('')
+
+def empty_groups():
+    task_manager.empty_groups()
+    pass
+def clear_group():
+    group = config_manager.get("group", default={})
+    if group:
+        for key in list(group.keys()):
+            links = group[key]
+            current_timestamp = time.time()
+            time_difference = int(current_timestamp) - int(key)
+            two_days_in_seconds = 2 * 24 * 60 * 60
+            if time_difference > two_days_in_seconds:
+                for item in links:
+                    task_manager.clear_group(item['id'])
+                    time.sleep(0.2)
+                config_manager.remove(f'group.{key}')
+
+
+app_id = 'cli_a60aa656b939100e'
+app_secret = 'sarxErZ9gpw2Au6xTVJ2tdEAfZ8sx1s4'
+error_file_path = 'logs/error.log'
+log_file_path = 'logs/run.log'
+config_file_path = 'config/config.json'
+
+ensure_file_exists(config_file_path)
+create_config(config_file_path)
+config_manager = ConfigManager(config_file_path)
+threadCount = config_manager.get("thread.threadCount", default=20)
+
+task_manager = TaskManager(log_file_path, error_file_path, app_id, app_secret,threadCount, runfn, errorfn)
+# task_manager.ensure_file_exists(config_file_path)
+
+
+
+# class LoadingDialog(Toplevel):
+#     def __init__(self, parent, title, message):
+#         Toplevel.__init__(self, parent)
+#         self.title(title)
+#         self.transient(parent)
+#         self.grab_set()
+#         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+#         self.label = tk.Label(self, text=message)
+#         self.label.pack(padx=20, pady=20)
+
+#         self.update_idletasks()
+#         self.center_window()
+#         self.lift()  # 提升窗口层级
+
+#     def center_window(self):
+#         self.update_idletasks()  # 更新窗口大小
+#         screen_width = self.winfo_screenwidth()
+#         screen_height = self.winfo_screenheight()
+#         window_width = self.winfo_width()
+#         window_height = self.winfo_height()
+
+#         x = (screen_width // 2) - (window_width // 2)
+#         y = (screen_height // 2) - (window_height // 2)
+#         self.geometry(f"+{x}+{y}")
+
+#     def on_close(self):
+#         self.destroy()
+
+class LoadingDialog(Toplevel):
+    def __init__(self, parent, title, message):
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        self.label = tk.Label(self, text=message)
+        self.label.pack(padx=20, pady=20)
+
+        self.update_idletasks()
+        self.center_window()
+        self.lift()  
+
+    
+        self.close_event = threading.Event()
+
+        self.task_thread = threading.Thread(target=self.long_running_task)
+        self.task_thread.start()
+
+    def center_window(self):
+        self.update_idletasks()  
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        window_width = self.winfo_width()
+        window_height = self.winfo_height()
+
+        x = (screen_width // 2) - (window_width // 2)
+        y = (screen_height // 2) - (window_height // 2)
+        self.geometry(f"+{x}+{y}")
+
+    def on_close(self):
+        self.close_event.set()
+    def long_running_task(self):
+        while not self.close_event.is_set():
+            time.sleep(0.1)
+        self.destroy()
+
+def validate_key():
+    key = entry_key.get().strip()
+    if key:
+        loading_dialog = LoadingDialog(root, "验证中", "验证中，请稍候...")
+        root.update()
+        if task_manager.test_key(key):
+            loading_dialog.on_close()
+            messagebox.showinfo("验证", "密钥验证通过")
+            if task_manager.user_id and task_manager.feishuAPI.owner_id and task_manager.user_id  == task_manager.feishuAPI.owner_id:
+                btn_dismiss_groups.pack(side=tk.LEFT, padx=10)
+            else:
+                btn_dismiss_groups.pack_forget()
+            entry_key.config(state=tk.DISABLED)
+            btn_validate.config(state=tk.DISABLED)
+            config_manager.set("user.key", key)
+            enable_step(2)
         else:
-            print('输入有误！')
+            loading_dialog.on_close()
+            messagebox.showwarning("验证", "请输入密钥")
+    else:
+        messagebox.showwarning("验证", "请输入密钥")
 
-    # 获取群分享链接
-    share_link_1 = get_group_share_link(access_token, chat_id_1)
-    if not share_link_1:
+def reset():
+    entry_key.config(state=tk.NORMAL)
+    entry_key.delete(0, tk.END)
+    btn_validate.config(state=tk.NORMAL)
+    wechat_feishu_login_var.set(0)
+    wechat_feishu_login_cb.config(state=tk.DISABLED)
+    btn_pause.config(state=tk.DISABLED)
+    btn_reset.config(state=tk.NORMAL)
+    status_label.config(text="状态: 等待", fg="black")
+    manual_order_entry.delete(1.0, tk.END)
+    manual_order_place_btn.config(state=tk.DISABLED)
+    step_completed[2] = step_completed[3] = step_completed[4] = False
+    
+    btn_dismiss_groups.config(state=tk.NORMAL)  # 重置后启用解散群聊按钮
+    btn_dismiss_groups.pack_forget()
+
+def wechat_feishu_login():
+    if wechat_feishu_login_var.get():
+        messagebox.showinfo("微信和飞书登录", "请确认微信和飞书已打开并处于登录状态。")
+        task_manager.open_wechat()
+        wechat_feishu_login_cb.config(state=tk.DISABLED)
+        enable_step(3)
+
+
+def on_radio_select():
+    if not step_completed[3]:
+        messagebox.showwarning("步骤未完成", "请先完成微信和飞书登录步骤。")
         return
-    share_link_2 = get_group_share_link(access_token, chat_id_2)
-    if not share_link_2:
+
+    group = config_manager.get("group", default={})
+    links = []
+    loading_dialog = LoadingDialog(root, "加入中", "群聊加入中，请稍候...")
+    root.update()
+    current_timestamp = time.time()
+    current_timestamp = int(current_timestamp)
+    max_key = current_timestamp
+
+    if not group:
+        links = task_manager.create_fs_group_link()
+        group[current_timestamp] = links
+        config_manager.set("group", group)
+    else:
+        max_key = max(group)
+        links = group[max_key]
+
+        given_time = datetime.fromtimestamp(int(max_key))
+  
+        today = datetime.today().date()
+        
+        today_6am = datetime.combine(today, dt_time(6, 0, 0))
+        
+        if today_6am > given_time:
+            links = task_manager.create_fs_group_link()
+            group[current_timestamp] = links
+            config_manager.set("group", group)
+            max_key = current_timestamp
+    step_completed[4] = True
+    loading_dialog.on_close()
+    chat_1 = links[0]['id']
+    chat_2 = links[1]['id']
+    chat_3 = links[2]['id']
+    task_manager.setChat_id(chat_1,chat_2,chat_3)
+    messagebox.showinfo("加入成功", "加入群聊成功。")
+    btn_start.config(state=tk.NORMAL)
+    btn_dismiss_groups.config(state=tk.DISABLED)  # 加入群聊后禁用解散群聊按钮
+    thread = threading.Thread(target=clear_group)
+    thread.start()
+    thread.join()
+
+def on_start():
+    if not step_completed[4]:
+        messagebox.showwarning("步骤未完成", "请先完成加入群聊步骤。")
         return
-    share_link_3 = get_group_share_link(access_token, chat_id_3)
-    if not share_link_3:
+
+    status_label.config(text="状态: 开始运行", fg="black")
+    task_manager.go()
+    log_button.config(state=tk.NORMAL)
+    error_log_button.config(state=tk.NORMAL)
+    btn_start.config(state=tk.DISABLED)
+    btn_pause.config(state=tk.NORMAL)
+    btn_reset.config(state=tk.DISABLED)
+    manual_order_query_btn.config(state=tk.NORMAL)
+
+
+def on_pause():
+    status_label.config(text="状态: 暂停", fg="black")
+    task_manager.pause()
+    messagebox.showinfo("暂停", "系统已暂停")
+    btn_start.config(state=tk.NORMAL)
+    btn_pause.config(state=tk.DISABLED)
+    manual_order_query_btn.config(state=tk.NORMAL)
+
+
+def show_log():
+    log_window = Toplevel(root)
+    log_window.title("日志")
+    log_window.geometry("600x400")
+    log_text = tk.Text(log_window, wrap=tk.NONE)
+    log_text.pack(fill=tk.BOTH, expand=True)
+    scrollbar = ttk.Scrollbar(log_window, command=log_text.yview)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    log_text.config(yscrollcommand=scrollbar.set)
+    log_text.insert(tk.END, log_content.get())
+    log_window.lift()  # 提升窗口层级
+
+
+def show_error_log():
+    error_log_window = Toplevel(root)
+    error_log_window.title("错误日志")
+    error_log_window.geometry("600x400")
+    error_log_text = tk.Text(error_log_window, wrap=tk.NONE)
+    error_log_text.pack(fill=tk.BOTH, expand=True)
+    scrollbar = ttk.Scrollbar(error_log_window, command=error_log_text.yview)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    error_log_text.config(yscrollcommand=scrollbar.set)
+    error_log_text.insert(tk.END, error_log_content.get())
+    error_log_window.lift()  # 提升窗口层级
+
+
+def update_log(msg):
+    log_content.set(log_content.get() + msg + "\n")
+
+
+def update_error_log(msg):
+    error_log_content.set(error_log_content.get() + msg + "\n")
+
+
+def enable_step(step):
+    step_completed[step] = True
+    if step == 2:
+        wechat_feishu_login_cb.config(state=tk.NORMAL)
+    elif step == 3:
+        on_radio_select()
+
+
+def center_window(root, width, height):
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x = (screen_width / 2) - (width / 2)
+    y = (screen_height / 2) - (height / 2)
+    root.geometry(f'{width}x{height}+{int(x)}+{int(y)}')
+
+
+def manual_order_query():
+    if task_manager.status == 'init':
+        messagebox.showwarning("查询错误", "任务开始之后才能查询订单")
         return
 
-    print('当前空闲 GROUP_LINK：')
-    print(share_link_1)
-    print('当前非空闲 GROUP_LINK：')
-    print(share_link_2)
-    print('未通过京东 GROUP_LINK：')
-    print(share_link_3)
+    query_text = manual_order_entry.get(1.0, tk.END).strip()
+    if query_text:
+        loading_dialog = LoadingDialog(root, "查询中", "订单查询中，请稍候...")
+        root.update()
 
-    with open('group_create_log.txt', mode='wt', encoding='utf-8') as file_object:
-        file_object.write(f'当前空闲 chat_id ->{chat_id_1}\n')
-        file_object.write(share_link_1)
-        file_object.write('\n')
-        file_object.write(f'当前非空闲 chat_id ->{chat_id_2}\n')
-        file_object.write(share_link_2)
-        file_object.write('\n')
-        file_object.write(f'未通过京东 chat_id ->{chat_id_3}\n')
-        file_object.write(share_link_3)
+        def query_order():
+            task_manager.order_push(query_text)
+            result = task_manager.result_queue.get()
+            answer = ''
+            res = '【无可预约时间】'
+            if result:
+                res = result['res']
+                answer = result['answer']
+                res_list = re.findall('###.+?###', answer, re.DOTALL)
+                # 循环提取到的任务
+                _list = []
+                for _res in res_list:
+                    work_name_re = re.findall('###客户姓名：(.+?)；', _res)[0]
+                    work_phone_re = re.findall('客户电话：(.+?)；', _res)[0]
+                    work_life_re = re.findall('持续时间：(.+?)；', _res)[0]
+                    work_time_re = re.findall('预约时间：(.+?)；', _res)[0]
+                    work_addr_re = re.findall('预约地址：(.+?)；', _res, re.DOTALL)[0]
+                    # work_addr_re = ['\n'] + work_addr_re
+                    
+                    
+                    if work_phone_re == '空':
+                        work_phone_re = ''
+                    _str = f'美团家政{work_life_re}\n{work_name_re} {work_phone_re}\n{work_addr_re}\n\n{work_time_re}'
+                    
+                    _list.append(_str)
+                answer = '\n'.join(_list)
+            def update_ui():
+                loading_dialog.on_close()
+                manual_order_result.config(state=tk.NORMAL)
+                manual_order_result.delete(1.0, tk.END)
+                manual_order_result.insert(tk.END, answer)
+                manual_order_result.config(state=tk.DISABLED)
+                query_result_text.config(state=tk.NORMAL)
+                query_result_text.delete(1.0, tk.END)
+                # if "无可预约时间" in res:
+                #     query_result_text.insert(tk.END, res, "red")
+                # elif "当前时间可预约" in res:
+                #     query_result_text.insert(tk.END, res, "green")  
+                # else:
+                #     query_result_text.insert(tk.END, res, "black")  
+                query_result_text.config(state=tk.DISABLED)
+            root.after(0, update_ui)
 
-    x = input('加入飞书群聊后继续 Enter -> ')
-
-    print('飞书配置完成 >>>')
-    # ——————————————————————————持续刷新飞书凭证，创建飞书群——————————————————————————————————————
-
-    savedStdout = sys.stdout
-    print_log = open("printlog.log", "w", encoding='utf8')
-    sys.stdout = print_log
-
-    # ——————————————————————————配置selenium谷歌浏览器——————————————————————————————————————
-    driver = launch_browser()
-
-    if not driver:
-        return
-    # ——————————————————————————配置selenium谷歌浏览器——————————————————————————————————————
-
-    # 创建一个从微信获取原生消息 存放的队列
-    wait_for_exec_queue = queue.Queue()
-
-    # 创建一个筛选后的字典队列
-    dict_queue = queue.Queue()
-
-    # 创建一个已经处理完待发送的 消息队列
-    msg_queue = queue.Queue()
-
-    # 创建一个固定长度为 200 的队列 用于排除重复消息
-    fix_msg_queue = FixedSizeQueue(50)
-
-    # 锁定微信窗口
-    print('锁定微信窗口 >>>')
-    wx = WindowControl(ClassName='WeChatMainWndForPC')
-
-    # 切换到微信窗口
-    print('切换微信窗口 >>>')
-    wx.SwitchToThisWindow()
-
-    print('调整微信窗口 >>>')
-    # 查找微信窗口
-    wechat_window = gw.getWindowsWithTitle('微信')[0]
-    # 获取屏幕的宽度
-    screen_width, _ = pyautogui.size()
-    # 设置新的窗口左上角的 x 坐标，使其位于屏幕最右边，仅露出来50px
-    new_left = screen_width - 200
-    # 设置窗口新的位置和大小
-    wechat_window.moveTo(new_left, 0)  # 将窗口移动到新的位置
-    wechat_window.resizeTo(25, 66666666)  # 设置窗口新的大小
-
-    # 关键词设置
-    with open('key.txt', mode='rt', encoding='utf-8') as file:
-        content = file.read()
-    keys = [item.strip() for item in re.findall('keys = \[(.+?)]', content)[0].strip().split(',')]
-    refuse_keys = [item.strip() for item in re.findall('refuse_keys = \[(.+?)]', content)[0].strip().split(',')]
-    print('关键词设置完毕 >>>')
-
-    # 过滤省级地址
-    with open('location.txt', mode='rt', encoding='utf-8') as file:
-        content = file.read()
-    locations = [item.strip() for item in re.findall('locations = \[(.+?)]', content)[0].strip().split(',')]
-    print('过滤地址设置完毕 >>>')
-
-    print('UI初始化已完成,开始监控任务 >>>')
-
-    # 开启线程：从 WX 获取消息 存入 wait_for_exec_queue
-    print('开启线程 1/5 >>> ')
-    p = threading.Thread(target=get_msg, args=(wx, fix_msg_queue_total, wait_for_exec_queue, psw))
-    p.start()
-
-    # 开启线程：从 wait_for_exec_queue 队列中取出消息，并调用  ——————————大模型——————————处理， 结果存入 dict_queue
-    print('开启线程 2/5 >>> ')
-    for i in range(5):
-        p = threading.Thread(target=exec_source_msg,
-                             args=(wait_for_exec_queue, dict_queue, keys, refuse_keys, locations, fix_msg_queue))
-
-        p.start()
-
-    # 开启线程：从 dict_queue 队列中取出字典信息，查询京东结果，并将结果存入msg_queue
-    print('开启线程 3/5 >>> ')
-    for i in range(5):
-        p = threading.Thread(target=exec_msg_queue,
-                             args=(driver, dict_queue, msg_queue))
-
-        p.start()
-
-    # 开启线程：从待发送消息队列 取消息，然后发送到飞书
-    print('开启线程 4/5 >>> ')
-    for i in range(1):
-        p = threading.Thread(target=msg_queue_do,
-                             args=(msg_queue, access_token_list, chat_id_1, chat_id_2, chat_id_3))
-        p.start()
-
-    print('线程加载完毕 开始工作 >>> ')
+        thread = threading.Thread(target=query_order)
+        thread.start()
+    else:
+        messagebox.showwarning("查询错误", "请输入订单信息")
 
 
-if __name__ == '__main__':
-    go()
+def manual_order_place():
+    messagebox.showinfo("下单", "订单已成功下单")
+
+
+def copy_query_result():
+    root.clipboard_clear()
+    root.clipboard_append(manual_order_result.get(1.0, tk.END).strip())
+    messagebox.showinfo("复制", "查询结果已复制到剪贴板")
+
+
+def on_closing():
+    if messagebox.askokcancel("退出", "退出之后所有的工作将关闭，确定退出吗?"):
+        root.destroy()
+        task_manager.destroy()
+        sys.exit(1)
+
+
+def confirm_dismiss_groups():
+    if messagebox.askyesno("确认解散群聊", "该操作会解散创建的所有群聊，是否继续？"):
+        loading_dialog = LoadingDialog(root, "解散中", "群聊解散中，请稍候...")
+        root.update()
+
+        def dismiss_groups():
+            empty_groups()
+            loading_dialog.on_close()
+            messagebox.showinfo("解散完成", "所有群聊已解散完成")
+
+        thread = threading.Thread(target=dismiss_groups)
+        thread.start()
+
+
+def add_to_whitelist():
+    item = simpledialog.askstring("添加白名单", "请输入要添加到白名单的内容：")
+    if item:
+        whitelist = config_manager.get("whitelist", default=[])
+        whitelist.append(item)
+        config_manager.set("whitelist", whitelist)
+        messagebox.showinfo("添加成功", f"{item} 已添加到白名单")
+
+
+def add_to_blacklist():
+    item = simpledialog.askstring("添加黑名单", "请输入要添加到黑名单的内容：")
+    if item:
+        blacklist = config_manager.get("blacklist", default=[])
+        blacklist.append(item)
+        config_manager.set("blacklist", blacklist)
+        messagebox.showinfo("添加成功", f"{item} 已添加到黑名单")
+
+def main():
+    global entry_key, btn_validate, wechat_feishu_login_cb, wechat_feishu_login_var, root, btn_start, btn_pause, btn_reset, step_completed, status_label, log_button, error_log_button, manual_order_entry, manual_order_query_btn, manual_order_place_btn, log_content, error_log_content, auto_validate_var, auto_validate_cb, manual_order_result,query_result_text, btn_dismiss_groups, whitelist_text, blacklist_text
+
+    step_completed = {2: False, 3: False, 4: False}
+
+    root = tk.Tk()
+    root.title("管理系统")
+    root.resizable(True, True)
+
+    window_width = 650
+    window_height = 500
+    center_window(root, window_width, window_height)
+    
+    
+    def show_right_click_menu(event):
+        if event:
+            text_widget = event.widget
+            # 检查是否有文本被选中
+            if text_widget.tag_ranges(tk.SEL):
+                right_click_menu.entryconfig("粘贴", state=tk.DISABLED)
+                right_click_menu.entryconfig("复制", state=tk.NORMAL)
+                right_click_menu.entryconfig("剪切", state=tk.NORMAL)
+            else:
+                right_click_menu.entryconfig("粘贴", state=tk.NORMAL)
+                right_click_menu.entryconfig("复制", state=tk.DISABLED)
+                right_click_menu.entryconfig("剪切", state=tk.DISABLED)
+            right_click_menu.post(event.x_root, event.y_root)
+
+    def copy_selected_text(event):
+        if event:
+            text_widget = event.widget
+            if text_widget.tag_ranges(tk.SEL):
+                selected_text = text_widget.selection_get()
+                root.clipboard_clear()
+                root.clipboard_append(selected_text)
+                root.update()  
+
+
+    def paste_text(event):
+        if event:
+            text_widget = event.widget
+            if text_widget.cget('state') == tk.NORMAL:
+                try:
+                    clipboard_data = root.clipboard_get()
+                    insert_pos = text_widget.index(tk.INSERT)
+                    
+    
+                    text_widget.delete(insert_pos, insert_pos + " +1c")
+      
+                    text_widget.insert(tk.INSERT, clipboard_data)
+                except tk.TclError:
+                    pass 
+
+    def cut_selected_text(event):
+        if event:
+            text_widget = event.widget
+            if text_widget.tag_ranges(tk.SEL):
+                selected_text = text_widget.selection_get()
+                text_widget.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                root.clipboard_clear()
+                root.clipboard_append(selected_text)
+                root.update()  
+ 
+
+    right_click_menu = tk.Menu(root, tearoff=0)
+    right_click_menu.add_command(label="复制", command=lambda: copy_selected_text(event=None))
+    right_click_menu.add_command(label="粘贴", command=lambda: paste_text(event=None))
+    right_click_menu.add_command(label="剪切", command=lambda: cut_selected_text(event=None))
+    
+    def show_right_click_menu(event):
+        text_widget = event.widget
+        if text_widget.tag_ranges(tk.SEL):
+            right_click_menu.entryconfig("粘贴", state=tk.DISABLED)
+            right_click_menu.entryconfig("复制", state=tk.NORMAL)
+            right_click_menu.entryconfig("剪切", state=tk.NORMAL)
+        else:
+            right_click_menu.entryconfig("粘贴", state=tk.NORMAL)
+            right_click_menu.entryconfig("复制", state=tk.DISABLED)
+            right_click_menu.entryconfig("剪切", state=tk.DISABLED)
+        right_click_menu.post(event.x_root, event.y_root)
+        
+        
+    with open('logs/run.log', 'w', encoding='utf-8') as file:
+        file.write('')
+    with open('logs/error.log', 'w', encoding='utf-8') as file:
+        file.write('')
+
+    frame_top = tk.Frame(root, pady=10)
+    frame_top.pack(fill=tk.X)
+    tk.Label(frame_top, text="1. 输入密钥:", font=('Arial', 12)).pack(side=tk.LEFT, padx=10)
+    entry_key = tk.Entry(frame_top, font=('Arial', 12))
+    entry_key.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+    saved_key = config_manager.get('user.key')
+    if saved_key:
+        entry_key.insert(0, saved_key)
+
+    auto_validate_var = tk.BooleanVar(value=config_manager.get("user.autologon"))
+    auto_validate_cb = tk.Checkbutton(frame_top, text="自动验证", variable=auto_validate_var,
+                                      command=lambda: [messagebox.showinfo("自动验证", "自动验证已开启" if auto_validate_var.get() else "自动验证已关闭"), config_manager.set("user.autologon", auto_validate_var.get())],
+                                      font=('Arial', 12))
+    auto_validate_cb.pack(side=tk.LEFT, padx=10)
+    btn_validate = tk.Button(frame_top, text="验证", command=validate_key, font=('Arial', 12))
+    btn_validate.pack(side=tk.LEFT, padx=10)
+    btn_reset = tk.Button(frame_top, text="重置", command=reset, font=('Arial', 12))
+    btn_reset.pack(side=tk.LEFT, padx=10)
+    btn_dismiss_groups = tk.Button(frame_top, text="解散群聊", command=confirm_dismiss_groups, font=('Arial', 12))
+    btn_dismiss_groups.pack_forget() 
+    # btn_dismiss_groups.pack(side=tk.LEFT, padx=10)
+
+    frame_logins = tk.Frame(root, pady=10)
+    frame_logins.pack(fill=tk.X)
+    tk.Label(frame_logins, text="2. 微信和飞书登录:", font=('Arial', 12)).pack(side=tk.LEFT, padx=10)
+    wechat_feishu_login_var = tk.IntVar()
+    wechat_feishu_login_cb = tk.Checkbutton(frame_logins, text="已登录", variable=wechat_feishu_login_var, command=wechat_feishu_login, font=('Arial', 12), state=tk.DISABLED)
+    wechat_feishu_login_cb.pack(side=tk.LEFT, padx=10)
+
+    manual_order_frame = tk.LabelFrame(root, text="3. 手动订单查询", font=('Arial', 12))
+    manual_order_frame.pack(fill=tk.X, padx=20, pady=10)
+
+    manual_order_input_frame = tk.Frame(manual_order_frame)
+    manual_order_input_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+
+
+    manual_order_entry = tk.Text(manual_order_input_frame, height=5, font=('Arial', 12))
+    manual_order_entry.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+    
+    # manual_order_entry.config(state='disabled')
+    # manual_order_entry.bind("<Button-3>", show_right_click_menu)
+    # manual_order_entry.bind("<Control-c>", copy_selected_text)
+    # manual_order_entry.bind("<Control-v>", paste_text)
+    # manual_order_entry.bind("<Control-x>", cut_selected_text)
+
+    query_result_frame = tk.LabelFrame(manual_order_input_frame, text="查询结果")
+    query_result_frame.grid(row=0, column=1, sticky='nsew', padx=(5, 5))
+
+
+
+    query_result_text = tk.Text(query_result_frame, height=5, font=('Arial', 12), state=tk.DISABLED)
+    query_result_text.pack(fill=tk.BOTH, expand=True)
+    
+    
+    query_result_text.tag_configure("green", foreground="green")
+    query_result_text.tag_configure("red", foreground="red")
+    query_result_text.tag_configure("black", foreground="black")
+    
+    
+    manual_order_result = tk.Text(manual_order_input_frame, height=5, font=('Arial', 12), state=tk.DISABLED)
+    manual_order_result.grid(row=0, column=2, sticky='nsew', padx=(5, 0))
+    
+    
+    # manual_order_result.bind("<Button-3>", show_right_click_menu)
+    # manual_order_result.bind("<Control-c>", copy_selected_text)
+    # manual_order_result.bind("<Control-v>", paste_text)
+    # manual_order_result.bind("<Control-x>", cut_selected_text)
+    
+    
+
+    manual_order_input_frame.columnconfigure(0, weight=1)
+    manual_order_input_frame.columnconfigure(1, weight=1)
+    manual_order_input_frame.columnconfigure(2, weight=1)
+    manual_order_input_frame.rowconfigure(0, weight=1)
+
+    manual_order_query_btn = tk.Button(manual_order_frame, text="查询", command=manual_order_query, font=('Arial', 12))
+    manual_order_query_btn.pack(side=tk.LEFT, padx=10, pady=10)
+
+    manual_order_place_btn = tk.Button(manual_order_frame, text="下单", command=manual_order_place, font=('Arial', 12))
+    
+    manual_order_place_btn.pack(side=tk.LEFT, padx=10, pady=10)
+    manual_order_place_btn.config(state=tk.DISABLED)
+
+    copy_result_btn = tk.Button(manual_order_frame, text="复制结果", command=copy_query_result, font=('Arial', 12))
+    copy_result_btn.pack(side=tk.LEFT, padx=10, pady=10)
+
+    status_frame = tk.Frame(root)
+    status_frame.pack(fill=tk.X, pady=10)
+
+    status_label = tk.Label(status_frame, text="状态: 等待", font=('Arial', 12), fg="black")
+    status_label.pack(pady=10)
+
+    log_button = tk.Button(status_frame, text="查看日志", command=show_log, font=('Arial', 12))
+    log_button.pack(side=tk.LEFT, padx=10)
+
+    error_log_button = tk.Button(status_frame, text="查看错误日志", command=show_error_log, font=('Arial', 12))
+    error_log_button.pack(side=tk.LEFT, padx=10)
+
+    btn_start = tk.Button(status_frame, text="开始", command=on_start, font=('Arial', 12))
+    btn_start.pack(side=tk.LEFT, padx=10)
+
+    btn_pause = tk.Button(status_frame, text="暂停", command=on_pause, font=('Arial', 12))
+    
+    btn_pause.pack(side=tk.LEFT, padx=10)
+    
+    btn_pause.config(state=tk.DISABLED)
+    
+    
+    # add_whitelist_btn = tk.Button(status_frame, text="添加白名单", command=add_to_whitelist, font=('Arial', 12))
+    # add_whitelist_btn.pack(side=tk.LEFT, padx=10)
+
+    # add_blacklist_btn = tk.Button(status_frame, text="添加黑名单", command=add_to_blacklist, font=('Arial', 12))
+    # add_blacklist_btn.pack(side=tk.LEFT, padx=10)
+
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    log_content = tk.StringVar()
+    error_log_content = tk.StringVar()
+
+    sizegrip = ttk.Sizegrip(root)
+    sizegrip.pack(side=tk.BOTTOM, anchor=tk.SE)
+
+    # whitelist = config_manager.get("whitelist", default=[])
+    # blacklist = config_manager.get("blacklist", default=[])
+    # whitelist_text.insert(tk.END, "\n".join(whitelist))
+    # blacklist_text.insert(tk.END, "\n".join(blacklist))
+    if config_manager.get("user.key") and config_manager.get("user.autologon"):
+        root.after(1000, validate_key)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

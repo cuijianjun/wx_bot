@@ -1,208 +1,231 @@
 import json
-import time
+
 import requests
 
-
-# 获取应用访问令牌，失败返回None
-def get_access_token(app_id, app_secret):
-    url = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal'
-    headers = {'Content-Type': 'application/json; charset=utf-8'}
-    data = {
-        'app_id': app_id,
-        'app_secret': app_secret
-    }
-    response = requests.post(url, json=data, headers=headers)
-    access_token = response.json().get('tenant_access_token')
-    try:
-        return access_token
-    except:
-        print('获取应用访问令牌失败 >>>')
-        return None
-
-
-# 刷新飞书凭证
-def refresh_access_token(app_id, app_secret, access_token_list):
-    while True:
-        time.sleep(60)
-        access_token_list[0] = get_access_token(app_id, app_secret)
-
-
-# 创建群，成功返回chat_id，失败返回None
-def create_group(access_token, name='无主题'):
-    url = 'https://open.feishu.cn/open-apis/im/v1/chats'
-    headers = {
-        'Authorization': f'Bearer {access_token}',  # your access token
-        'Content-Type': 'application/json; charset=utf-8'
-    }
-    payload = json.dumps({
-        "chat_type": "public",
-        "name": name
-    })
-
-    response = requests.post(url, headers=headers, data=payload)
-    content = response.content.decode('utf-8')
-    try:
-        return json.loads(content)['data']['chat_id']
-    except:
-        print('创建群失败 >>>')
-        return None
-
-
-# 获取群分享链接，成功返回链接，失败返回None
-def get_group_share_link(access_token, chat_id):
-    url = f"https://open.feishu.cn/open-apis/im/v1/chats/{chat_id}/link"
-    payload = json.dumps({
-        "validity_period": "permanently"
-    })
-
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json'
-    }
-
-    response = requests.request("POST", url, headers=headers, data=payload)
-    content = response.content.decode('utf-8')
-    try:
-        return json.loads(content)['data']['share_link']
-    except:
-        print('获取群链接失败 >>>')
-        return None
-
-
-# 获取群列表 item为字典 {'chat_id': dict['chat_id'], 'name': dict['name']}
-def get_group_list(access_token):
-    url = "https://open.feishu.cn/open-apis/im/v1/chats?page_size=100"
-
-    headers = {
-        'Authorization': f'Bearer {access_token}'
-    }
-
-    response = requests.request("GET", url, headers=headers)
-    if response.status_code == 200:
-        return [{'chat_id': dict['chat_id'], 'name': dict['name']} for dict in
-                json.loads(response.content.decode('utf-8'))['data']['items']]
-    else:
-        return None
-
-
-# 解散群，成功返回True，失败返回False
-def close_group(access_token, chat_id):
-    url = f"https://open.feishu.cn/open-apis/im/v1/chats/{chat_id}"
-
-    headers = {
-        'Authorization': f'Bearer {access_token}'
-    }
-
-    response = requests.request("DELETE", url, headers=headers)
-    if response.status_code == 200:
+class FeishuAPI:
+    def __init__(self, app_id, app_secret,logger):
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.access_token = None
+        self.open_id = None
+        self.owner_id = '7f1638gc'
+        self.logger = logger
+    def get_access_token(self):
+        url = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal'
+        headers = {'Content-Type': 'application/json; charset=utf-8'}
+        data = {
+            'app_id': self.app_id,
+            'app_secret': self.app_secret
+        }
+        response = requests.post(url, json=data, headers=headers, verify=False)
+        access_token = response.json().get('tenant_access_token')
         try:
-            res = json.loads(response.content.decode('utf-8'))['msg']
+            return access_token
+        except:
+            print('获取应用访问令牌失败 >>>')
+            self.logger.info('获取应用访问令牌失败 >>>')
+            return None
+
+    # def refresh_access_token(self):
+    #     while True:
+    #         time.sleep(60)
+    #         self.access_token_list[0] = self.get_access_token()
+
+    def _request_with_retry(self, method, url, headers=None, params=None, data=None):
+        access_token = self.access_token
+        if not access_token:
+            access_token = self.get_access_token()
+            self.access_token = access_token
+
+        headers = headers or {}
+        headers['Authorization'] = f'Bearer {access_token}'
+
+        response = requests.request(method, url, headers=headers, params=params, data=data, verify=False)
+        content = response.content.decode('utf-8')
+        response_json = json.loads(content)
+        
+        if response_json.get('code') in [99991663,99991661,99991665,99991671,99991677]:  
+            new_access_token = self.get_access_token()
+            self.access_token = new_access_token
+            headers['Authorization'] = f'Bearer {new_access_token}'
+            response = requests.request(method, url, headers=headers, params=params, data=data, verify=False)
+            content = response.content.decode('utf-8')
+            response_json = json.loads(content)
+
+        return response_json
+    def create_group(self,user_id,name='无主题'):
+        # url = 'https://open.feishu.cn/open-apis/im/v1/chats'
+        url = 'https://open.feishu.cn/open-apis/im/v1/chats?set_bot_manager=false&user_id_type=user_id'
+        user_id_list = [self.owner_id,user_id]
+        # user_id_list = [user_id]
+        payload = json.dumps({
+            "chat_type": "public",
+            "name": name,
+            "user_id_list":user_id_list
+        })
+        headers = {'Content-Type': 'application/json; charset=utf-8'}
+        response_json = self._request_with_retry("POST", url, headers=headers, data=payload)
+        try:
+            return response_json['data']['chat_id']
+        except:
+            print('创建群失败 >>>')
+            self.logger.info('创建群失败 >>>')
+            return None
+
+    def get_group_share_link(self, chat_id):
+        url = f"https://open.feishu.cn/open-apis/im/v1/chats/{chat_id}/link"
+        payload = json.dumps({
+            "validity_period": "permanently"
+        })
+        headers = {'Content-Type': 'application/json'}
+        response_json = self._request_with_retry("POST", url, headers=headers, data=payload)
+        try:
+            return response_json['data']['share_link']
+        except:
+            print('获取群链接失败 >>>')
+            self.logger.info('获取群链接失败 >>>')
+            return None
+
+    def get_group_list(self):
+        url = "https://open.feishu.cn/open-apis/im/v1/chats?page_size=100"
+        headers = {}
+        response_json = self._request_with_retry("GET", url, headers=headers)
+        if response_json.get('code') == 0:
+            return [{'chat_id': dict['chat_id'], 'name': dict['name']} for dict in response_json['data']['items']]
+        else:
+            self.logger.info('获取群列表失败 >>>')
+            return None
+
+    def close_group(self, chat_id):
+        url = f"https://open.feishu.cn/open-apis/im/v1/chats/{chat_id}"
+        headers = {}
+        response_json = self._request_with_retry("DELETE", url, headers=headers)
+        # print('response_json',response_json)
+        if response_json.get('msg') == 'success':
+            return True
+        else:
+            return False
+
+    def empty_groups(self):
+        res = self.get_group_list()
+        print('群聊列表', res)
+        delList = []
+        for item in res:
+            data = self.close_group(item['chat_id'])
+            # print('data',data)
+            delList.append(data)
+            print('delete：', item['chat_id'])
+        return delList
+
+    def send(self, msg, chat_id):
+        url = "https://open.feishu.cn/open-apis/im/v1/messages"
+        params = {"receive_id_type": "chat_id"}
+        msgContent = {
+            "text": msg,
+        }
+        req = {
+            "receive_id": f"{chat_id}",
+            "msg_type": "text",
+            "content": json.dumps(msgContent)
+        }
+        payload = json.dumps(req)
+        headers = {'Content-Type': 'application/json; charset=utf-8'}
+        response_json = self._request_with_retry("POST", url, headers=headers, params=params, data=payload)
+        if response_json.get('msg') == 'success':
+            return True
+        else:
+            self.logger.info(f'消息发送失败 >>> ，{response_json}')
+            return False
+
+    def creaate_document(self):
+        url = "https://open.feishu.cn/open-apis/docx/v1/documents"
+        headers = {'Content-Type': 'application/json'}
+        response_json = self._request_with_retry("POST", url, headers=headers)
+        try:
+            return response_json['data']['document']['document_id']
+        except:
+            return None
+
+    def update_piece(self, document_id, block_id, new_content):
+        url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{block_id}"
+        payload = json.dumps({
+            "update_text_elements": {
+                "elements": [
+                    {
+                        "text_run": {
+                            "content": f"{new_content}"
+                        }
+                    }
+                ]
+            }
+        })
+        headers = {'Content-Type': 'application/json'}
+        response_json = self._request_with_retry("PATCH", url, headers=headers, data=payload)
+        try:
+            if response_json['code'] == 0:
+                return True
         except:
             return False
-        if res == 'success':
-            return True
-        return False
-    else:
-        return False
 
+    def get_users(self):
+        url = f"https://open.feishu.cn/open-apis/contact/v3/users/find_by_department?department_id=01&department_id_type=department_id&page_size=50"
+        headers = {}
+        response_json = self._request_with_retry("GET", url, headers=headers)
+        try:
+            return response_json['data']['items']
+        except:
+            return None
+    # def get_bot(self):
+    #     url = f"https://open.feishu.cn/open-apis/bot/v3/info"
+    #     headers = {}
+    #     response_json = self._request_with_retry("GET", url, headers=headers)
+    #     try:
+    #         self.open_id = response_json['bot']['open_id']
+    #         return response_json['bot']
+    #     except:
+    #         return None
+    # def set_chat_members(self, chat_id, open_id):
+    #     url = f"https://open.feishu.cn/open-apis/im/v1/chats/{chat_id}/members?member_id_type=user_id"
+        
+    #     id_list = [open_id]
+    #     if not self.open_id:
+    #         self.get_bot()
+    #     if self.open_id and open_id != self.open_id:
+    #         id_list.append(self.open_id)
+    #     print(111,chat_id,id_list)
+    #     payload = json.dumps({
+    #         "id_list": id_list
+    #     })
+    #     headers = {'Content-Type': 'application/json; charset=utf-8'}
+    #     response_json = self._request_with_retry("POST", url, headers=headers, data=payload)
+    #     print(response_json)
+    #     try: 
+    #         if response_json['code'] == 0:
+    #             return True
+    #     except:
+    #         return False
 
-# 解散所有群聊
-def empty_groups(access_token):
-    res = get_group_list(access_token)
-    print('群聊列表', res)
-    for item in res:
-        close_group(access_token, item['chat_id'])
-        print('delete：', item['chat_id'])
-
-
-# 发送消息，成功返回True，失败返回False
-def send(access_token, msg, chat_id):
-    url = "https://open.feishu.cn/open-apis/im/v1/messages"
-    params = {"receive_id_type": "chat_id"}
-    msgContent = {
-        "text": msg,
-    }
-    req = {
-        "receive_id": f"{chat_id}",  # chat id
-        "msg_type": "text",
-        "content": json.dumps(msgContent)
-    }
-    payload = json.dumps(req)
-    headers = {
-        'Authorization': f'Bearer {access_token}',  # your access token
-        'Content-Type': 'application/json; charset=utf-8'
-    }
-    response = requests.request("POST", url, params=params, headers=headers, data=payload)
-    content = response.content.decode('utf-8')  # Print Response
-    msg = json.loads(content)['msg']
-    if msg == 'success':
-        return True
-    else:
-        return False
-
-
-# 创建文档，成功返回文档document_id，失败返回None            ---用于验证权限
-def creaate_document(access_token):
-    url = "https://open.feishu.cn/open-apis/docx/v1/documents"
-
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json'
-    }
-
-    response = requests.request("POST", url, headers=headers)
-    try:
-        return json.loads(response.content)['data']['document']['document_id']
-    except:
-        return None
-
-
-# 更新块的内容，成功返回True，失败返回False            ---用于验证权限
-def update_piece(access_token, document_id, block_id, new_content):
-    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{block_id}"
-    payload = json.dumps({
-        "update_text_elements": {
-            "elements": [
-                {  # text_run代表更新文本
-                    "text_run": {
-                        "content": f"{new_content}"
-                    }
-                }
-            ]
-        }
-    })
-
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {access_token}'
-    }
-
-    response = requests.request("PATCH", url, headers=headers, data=payload)
-    try:
-        if json.loads(response.content)['code'] == 0:
-            return True
-    except:
-        return False
-
-
-# 获取文档纯文本内容            ---用于验证权限
-def get_document_content(access_token, document_id):
-    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/raw_content"
-    headers = {
-        "Authorization": f"Bearer {access_token}"
-    }
-
-    response = requests.get(url, headers=headers)
-
-    try:
-        return json.loads(response.content)['data']['content'].strip()
-    except:
-        return None
+    def get_document_content(self, document_id):
+        url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/raw_content"
+        headers = {}
+        response_json = self._request_with_retry("GET", url, headers=headers)
+        try:
+            return response_json['data']['content'].strip()
+        except:
+            return None
 
 
 if __name__ == '__main__':
-    # 配置你的应用程序凭证
-    app_id = 'cli_a6cb07f2a6f4d013'
-    app_secret = 'Vi2dPXRLCRfrj0hppj40hfiZIGLRmdbh'
-    access_token = get_access_token(app_id, app_secret)
-    empty_groups(access_token)
+    app_id = 'cli_a60aa656b939100e'
+    app_secret = 'sarxErZ9gpw2Au6xTVJ2tdEAfZ8sx1s4'
+    feishu_api = FeishuAPI(app_id, app_secret)
+    
+    # print(feishu_api.get_bot())
+    # pass
+    # # 示例调用
+    # chat_id = feishu_api.create_group('测试群')
+    # print('创建的群ID:', chat_id)
+    # share_link = feishu_api.get_group_share_link(chat_id)
+    # print('群分享链接:', share_link)
+    # feishu_api.send('Hello, Feishu!', chat_id)
+    # feishu_api.empty_groups()

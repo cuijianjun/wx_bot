@@ -1,0 +1,28 @@
+{
+    "user": {
+        "autologon": true,
+        "key": "0230"
+    },
+    "group": {
+        "1734091833": [
+            {
+                "id": "oc_3e55f20c0154ccc4a7075c32ef9d1777",
+                "name": "杭州群-徐涛 12-13",
+                "user_id": "1152566g"
+            },
+            {
+                "id": "oc_e09f7a95e08a71b1ae3c1d7d48344144",
+                "name": "非杭州（当天）群-徐涛 12-13",
+                "user_id": "1152566g"
+            },
+            {
+                "id": "oc_3a89898b0ab07c498feaf9ae760d50f3",
+                "name": "非杭州（以后）群-徐涛 12-13",
+                "user_id": "1152566g"
+            }
+        ]
+    },
+    "thread": {
+        "threadCount": 20
+    }
+}

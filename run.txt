@@ -1,0 +1,2 @@
+py -m comtypes.clear_cache
+nuitka --onefile  --include-data-dir=JS=JS --include-data-dir=data=data --include-data-file=key.json=key.json --include-data-file=location.txt=location.txt  --enable-plugin=tk-inter --include-package=uiautomation  --include-package=comtypes --windows-disable-console --nofollow-imports --clang main.py
